@@ -1,0 +1,6 @@
+{
+  "name": "Estate Governance - Facility Operations LIVE",
+  "description": "Multi-facility reservation calendar, authorization dossier management, capacity tracking, and operational analytics dashboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
