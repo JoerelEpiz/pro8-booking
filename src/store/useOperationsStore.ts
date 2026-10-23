@@ -27,6 +27,7 @@ interface OperationsState {
   searchQuery: string;
   theme: 'light' | 'dark';
   mobileSidebarOpen: boolean;
+  isLoading: boolean;
 
   // Active Modals & Selection
   isCreateModalOpen: boolean;
@@ -41,6 +42,7 @@ interface OperationsState {
   notificationsCount: number;
 
   // Actions
+  fetchInitialData: () => Promise<void>;
   setActiveTab: (tab: MainNavTab) => void;
   setCalendarMode: (mode: CalendarViewMode) => void;
   setSelectedFacilityId: (id: string) => void;
@@ -59,10 +61,10 @@ interface OperationsState {
 
   createReservation: (
     data: Omit<Reservation, 'id' | 'dossierRef' | 'createdAt' | 'approvedBy' | 'approvalDate'>
-  ) => { success: boolean; error?: string };
+  ) => Promise<{ success: boolean; error?: string }>;
 
-  updateReservationStatus: (id: string, status: ReservationStatus) => void;
-  deleteReservation: (id: string, reason?: string) => void;
+  updateReservationStatus: (id: string, status: ReservationStatus) => Promise<void>;
+  deleteReservation: (id: string, reason?: string) => Promise<void>;
   setCurrentUser: (user: User) => void;
   exportCsvData: () => void;
 }
@@ -75,6 +77,7 @@ export const useOperationsStore = create<OperationsState>((set, get) => ({
   searchQuery: '',
   theme: 'light',
   mobileSidebarOpen: false,
+  isLoading: false,
 
   isCreateModalOpen: false,
   selectedReservationId: null,
@@ -85,6 +88,28 @@ export const useOperationsStore = create<OperationsState>((set, get) => ({
   currentUser: CURRENT_USER,
   logs: INITIAL_ACTIVITY_LOGS,
   notificationsCount: 1,
+
+  fetchInitialData: async () => {
+    set({ isLoading: true });
+    try {
+      const [resFacilities, resReservations, resLogs] = await Promise.all([
+        fetch('/api/facilities').then((r) => (r.ok ? r.json() : null)),
+        fetch('/api/reservations').then((r) => (r.ok ? r.json() : null)),
+        fetch('/api/logs').then((r) => (r.ok ? r.json() : null)),
+      ]);
+
+      set((state) => ({
+        facilities: resFacilities && resFacilities.length > 0 ? resFacilities : state.facilities,
+        reservations:
+          resReservations && resReservations.length > 0 ? resReservations : state.reservations,
+        logs: resLogs && resLogs.length > 0 ? resLogs : state.logs,
+        isLoading: false,
+      }));
+    } catch (err) {
+      console.warn('PostgreSQL sync notice (using seed cache):', err);
+      set({ isLoading: false });
+    }
+  },
 
   setActiveTab: (tab) => set({ activeTab: tab }),
 
@@ -135,7 +160,6 @@ export const useOperationsStore = create<OperationsState>((set, get) => ({
 
   openDossierModal: (id) =>
     set((state) => {
-      // Add log
       const res = state.reservations.find((r) => r.id === id);
       const facility = state.facilities.find((f) => f.id === res?.facilityId);
       const newLog: ActivityLog = {
@@ -160,7 +184,7 @@ export const useOperationsStore = create<OperationsState>((set, get) => ({
 
   closeDossierModal: () => set({ selectedReservationId: null }),
 
-  createReservation: (data) => {
+  createReservation: async (data) => {
     const state = get();
     const facility = state.facilities.find((f) => f.id === data.facilityId);
 
@@ -194,76 +218,117 @@ export const useOperationsStore = create<OperationsState>((set, get) => ({
       severity: 'info',
     };
 
+    // Optimistically update client store
     set({
       reservations: [newRes, ...state.reservations],
       logs: [newLog, ...state.logs],
       isCreateModalOpen: false,
     });
 
+    // Save to PostgreSQL via API
+    try {
+      await fetch('/api/reservations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...newRes,
+          facilityName: facility?.name,
+        }),
+      });
+    } catch (err) {
+      console.error('Error saving reservation to PostgreSQL backend:', err);
+    }
+
     return { success: true };
   },
 
-  updateReservationStatus: (id, status) => {
-    set((state) => {
-      const res = state.reservations.find((r) => r.id === id);
-      if (!res) return state;
+  updateReservationStatus: async (id, status) => {
+    const state = get();
+    const res = state.reservations.find((r) => r.id === id);
+    if (!res) return;
 
-      const facility = state.facilities.find((f) => f.id === res.facilityId);
-      const isApproved = status === 'confirmed';
-      const updatedRes: Reservation = {
-        ...res,
-        status,
-        approvedBy: isApproved ? state.currentUser.name : res.approvedBy,
-        approvalDate: isApproved ? '2025-10-15' : res.approvalDate,
-      };
+    const facility = state.facilities.find((f) => f.id === res.facilityId);
+    const isApproved = status === 'confirmed';
+    const updatedRes: Reservation = {
+      ...res,
+      status,
+      approvedBy: isApproved ? state.currentUser.name : res.approvedBy,
+      approvalDate: isApproved ? '2025-10-15' : res.approvalDate,
+    };
 
-      const newLog: ActivityLog = {
-        id: `log-${Date.now()}`,
-        timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
-        userId: state.currentUser.id,
-        userName: state.currentUser.name,
-        userRole: state.currentUser.role,
-        action: isApproved ? 'RESERVATION_APPROVED' : 'RESERVATION_REJECTED',
-        facilityId: res.facilityId,
-        facilityName: facility?.name || 'Facility',
-        details: `Updated reservation ${res.dossierRef} status to ${status.toUpperCase()} by ${state.currentUser.name}.`,
-        ipAddress: '10.240.12.4',
-        severity: isApproved ? 'info' : 'warning',
-      };
+    const newLog: ActivityLog = {
+      id: `log-${Date.now()}`,
+      timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+      userId: state.currentUser.id,
+      userName: state.currentUser.name,
+      userRole: state.currentUser.role,
+      action: isApproved ? 'RESERVATION_APPROVED' : 'RESERVATION_REJECTED',
+      facilityId: res.facilityId,
+      facilityName: facility?.name || 'Facility',
+      details: `Updated reservation ${res.dossierRef} status to ${status.toUpperCase()} by ${state.currentUser.name}.`,
+      ipAddress: '10.240.12.4',
+      severity: isApproved ? 'info' : 'warning',
+    };
 
-      return {
-        reservations: state.reservations.map((r) => (r.id === id ? updatedRes : r)),
-        logs: [newLog, ...state.logs],
-      };
+    // Optimistically update
+    set({
+      reservations: state.reservations.map((r) => (r.id === id ? updatedRes : r)),
+      logs: [newLog, ...state.logs],
     });
+
+    // Save update to PostgreSQL via API
+    try {
+      await fetch(`/api/reservations/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status,
+          approvedBy: updatedRes.approvedBy,
+          approvalDate: updatedRes.approvalDate,
+          userName: state.currentUser.name,
+          facilityName: facility?.name,
+        }),
+      });
+    } catch (err) {
+      console.error('Error updating reservation in PostgreSQL:', err);
+    }
   },
 
-  deleteReservation: (id, reason) => {
-    set((state) => {
-      const res = state.reservations.find((r) => r.id === id);
-      if (!res) return state;
+  deleteReservation: async (id, reason) => {
+    const state = get();
+    const res = state.reservations.find((r) => r.id === id);
+    if (!res) return;
 
-      const facility = state.facilities.find((f) => f.id === res.facilityId);
-      const newLog: ActivityLog = {
-        id: `log-${Date.now()}`,
-        timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
-        userId: state.currentUser.id,
-        userName: state.currentUser.name,
-        userRole: state.currentUser.role,
-        action: 'RESERVATION_CANCELLED',
-        facilityId: res.facilityId,
-        facilityName: facility?.name || 'Facility',
-        details: `Revoked authorization dossier ${res.dossierRef} "${res.title}". Reason: ${reason || 'Operational rescheduling'}.`,
-        ipAddress: '10.240.12.4',
-        severity: 'warning',
-      };
+    const facility = state.facilities.find((f) => f.id === res.facilityId);
+    const newLog: ActivityLog = {
+      id: `log-${Date.now()}`,
+      timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+      userId: state.currentUser.id,
+      userName: state.currentUser.name,
+      userRole: state.currentUser.role,
+      action: 'RESERVATION_CANCELLED',
+      facilityId: res.facilityId,
+      facilityName: facility?.name || 'Facility',
+      details: `Revoked authorization dossier ${res.dossierRef} "${res.title}". Reason: ${reason || 'Operational rescheduling'}.`,
+      ipAddress: '10.240.12.4',
+      severity: 'warning',
+    };
 
-      return {
-        reservations: state.reservations.filter((r) => r.id !== id),
-        selectedReservationId: null,
-        logs: [newLog, ...state.logs],
-      };
+    // Optimistically update
+    set({
+      reservations: state.reservations.filter((r) => r.id !== id),
+      selectedReservationId: null,
+      logs: [newLog, ...state.logs],
     });
+
+    // Delete in PostgreSQL via API
+    try {
+      await fetch(`/api/reservations/${id}?reason=${encodeURIComponent(reason || '')}`, {
+        method: 'DELETE',
+      });
+    } catch (err) {
+      console.error('Error deleting reservation from PostgreSQL:', err);
+    }
   },
 
   setCurrentUser: (user) => set({ currentUser: user }),

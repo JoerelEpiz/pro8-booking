@@ -25,6 +25,8 @@ export const DossierDetailModal: React.FC = () => {
     currentUser,
   } = useOperationsStore();
 
+  const [confirmRevoke, setConfirmRevoke] = React.useState(false);
+
   if (!selectedReservationId) return null;
 
   const reservation = reservations.find((r) => r.id === selectedReservationId);
@@ -44,10 +46,8 @@ export const DossierDetailModal: React.FC = () => {
     deleteReservation(reservation.id, 'Rejected by Operations Command');
   };
 
-  const handleRevoke = () => {
-    if (confirm('Revoke this operational reservation authorization?')) {
-      deleteReservation(reservation.id, 'Revoked by Director of Operations');
-    }
+  const executeRevocation = () => {
+    deleteReservation(reservation.id, 'Revoked by Director of Operations');
   };
 
   return (
@@ -234,13 +234,36 @@ export const DossierDetailModal: React.FC = () => {
         {/* Footer Actions */}
         <div className="px-6 py-4 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 flex items-center justify-between">
           <div>
-            <button
-              onClick={handleRevoke}
-              className="inline-flex items-center gap-1.5 text-rose-600 dark:text-rose-400 hover:text-rose-800 text-xs font-semibold py-1.5 px-2 rounded-md hover:bg-rose-50 dark:hover:bg-rose-950/50 transition-colors"
-            >
-              <Trash2 className="w-4 h-4" />
-              <span>Revoke Dossier</span>
-            </button>
+            {confirmRevoke ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-rose-600 dark:text-rose-400 font-semibold">
+                  Confirm Revocation?
+                </span>
+                <button
+                  type="button"
+                  onClick={executeRevocation}
+                  className="px-2.5 py-1 text-xs font-semibold bg-rose-600 text-white rounded-md hover:bg-rose-700 shadow-2xs"
+                >
+                  Yes, Revoke
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmRevoke(false)}
+                  className="px-2 py-1 text-xs text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmRevoke(true)}
+                className="inline-flex items-center gap-1.5 text-rose-600 dark:text-rose-400 hover:text-rose-800 text-xs font-semibold py-1.5 px-2 rounded-md hover:bg-rose-50 dark:hover:bg-rose-950/50 transition-colors"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>Revoke Dossier</span>
+              </button>
+            )}
           </div>
 
           <div className="flex items-center gap-2">

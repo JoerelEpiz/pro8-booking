@@ -14,7 +14,12 @@ import { DossierDetailModal } from './components/DossierDetailModal';
 import { useOperationsStore } from './store/useOperationsStore';
 
 export default function App() {
-  const { activeTab, theme } = useOperationsStore();
+  const { activeTab, theme, fetchInitialData } = useOperationsStore();
+
+  // Hydrate store from PostgreSQL on mount
+  React.useEffect(() => {
+    fetchInitialData();
+  }, [fetchInitialData]);
 
   // Apply dark mode class to html document on mount
   React.useEffect(() => {
